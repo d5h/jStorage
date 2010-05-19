@@ -46,6 +46,13 @@
  * -flush()
  * $.jStorage.flush() -> clears the cache
  *
+ * -backendType()
+ * $.jStorage.backendType() ->
+ *    the name of the backend being used or an empty string if none could be
+ *    found.  Values are "localStorage", "globalStorage", "userData",
+ *    "Google Gears", or "".  It can be used as a Boolean to determine if
+ *    storage will be persistent.
+ *
  * <value> can be any JSON-able value, including objects and arrays.
  *
  */
@@ -62,8 +69,14 @@
 		/* Actual browser storage (localStorage or globalStorage['domain']) */
 		_storage_service = {jStorage:"{}"},
 
+		/* Name of the back end used (empty string if storage will not persist) */
+		_backend_type = "",
+
 		/* DOM element for older IE versions, holds userData behavior */
 		_storage_elm = null,
+
+		/* Used by Google Gears */
+		_storage_db = null,
 
 		/* function to encode objects to JSON strings */
 		json_encode = $.toJSON || Object.toJSON || (window.JSON && (JSON.encode || JSON.stringify)),
@@ -85,18 +98,22 @@
 		if(window.localStorage){
 			try {
 				_storage_service = window.localStorage;
+				_backend_type = "localStorage";
 			} catch(E0) {/* Firefox fails when touching localStorage and cookies are disabled */}
 		}
 		/* Check if browser supports globalStorage */
 		else if(window.globalStorage){
 			try {
 				_storage_service = window.globalStorage[window.location.hostname];
+				_backend_type = "globalStorage";
 			} catch(E1) {/* Firefox fails when touching localStorage and cookies are disabled */}
 		}
 		/* Check if browser supports userData behavior */
 		else {
 			_storage_elm = document.createElement('link');
 			if(_storage_elm.addBehavior){
+
+				_backend_type = "userData";
 
 				/* Use a DOM element to act as userData storage */
 				_storage_elm.style.behavior = 'url(#default#userData)';
@@ -112,12 +129,23 @@
 				_storage_service.jStorage = data;
 			}else{
 				_storage_elm = null;
-				return;
 			}
 		}
 
+		if (!_backend_type && (window.google && google.gears)){
+			_storage_db = google.gears.factory.create("beta.database");
+			_storage_db.open("jStorage");
+			_storage_db.execute("create table if not exists jStorage (k text primary key, v text)").close();
+			var result = _storage_db.execute("select k, v from jStorage");
+			while (result.isValidRow()){
+				_storage[result.field(0)] = json_decode(result.field(1));
+				result.next();
+			}
+			result.close();
+			_backend_type = "Google Gears";
+		}
 		/* if jStorage string is retrieved, then decode it */
-		if(_storage_service.jStorage){
+		else if(_storage_service.jStorage){
 			try{
 				_storage = json_decode(String(_storage_service.jStorage));
 			}catch(E3){_storage_service.jStorage = "{}";}
@@ -170,6 +198,10 @@
 			_checkKey(key);
 			_storage[key] = value;
 			_save();
+			if (_storage_db){
+				_storage_db.execute("replace into jStorage values (?, ?)",
+						    [String(key), json_encode(value)]).close();
+			}
 			return value;
 		},
 		
@@ -199,6 +231,10 @@
 			if(key in _storage){
 				delete _storage[key];
 				_save();
+				if (_storage_db){
+					_storage_db.execute("delete from jStorage where k = ?",
+							    [String(key)]).close();
+				}
 				return true;
 			}
 			return false;
@@ -220,6 +256,9 @@
 					localStorage.clear();
 				}catch(E5){}
 			}
+			if (_storage_db){
+				_storage_db.execute("delete from jStorage").close();
+			}
 			return true;
 		},
 		
@@ -232,7 +271,20 @@
 			function F() {}
 			F.prototype = _storage;
 			return new F();
+		},
+
+		/**
+		 * Returns the type of back-end storage used for persistence as
+		 * one of the strings "localStorage", "globalStorage", "userData",
+		 * "Google Gears", or "" if no back end could be found (and data
+		 * can't be persistently stored).
+		 * 
+		 * @returns String
+		*/
+		backendType: function(){
+			return _backend_type;
 		}
+
 	};
 
 	// Initialize jStorage
